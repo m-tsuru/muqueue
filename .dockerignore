@@ -1,0 +1,16 @@
+.git
+.github
+.gitignore
+.env
+.env.*
+*.db
+*.db-shm
+*.db-wal
+compose.yaml
+compose.yml
+docker-compose*.yaml
+docker-compose*.yml
+Dockerfile
+.dockerignore
+README.md
+LICENSE
