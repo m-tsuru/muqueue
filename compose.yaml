@@ -1,0 +1,31 @@
+services:
+  muqueue:
+    image: ghcr.io/m-tsuru/muqueue:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: muqueue
+    restart: unless-stopped
+    init: true
+    ports:
+      # リバースプロキシ経由のみで公開する場合は "127.0.0.1:${PORT:-8080}:8080" に変更してください
+      - "${PORT:-8080}:8080"
+    env_file:
+      - .env
+    environment:
+      GIN_MODE: release
+      TZ: Asia/Tokyo
+      DB_PATH: /app/data/gorm.db
+    volumes:
+      # ホストのディレクトリに直接保存したい場合は "./data:/app/data" に変更してください
+      - muqueue_data:/app/data
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  muqueue_data:

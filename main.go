@@ -1,6 +1,9 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
+
 	"github.com/gin-gonic/gin"
 	"github.com/m-tsuru/muqueue/connector"
 	"github.com/m-tsuru/muqueue/handlers"
@@ -14,7 +17,17 @@ func main() {
 		panic("failed to load .env file: " + err.Error())
 	}
 
-	db, err := gorm.Open(sqlite.Open("gorm.db"), &gorm.Config{})
+	dbPath := os.Getenv("DB_PATH")
+	if dbPath == "" {
+		dbPath = "gorm.db"
+	}
+	if dir := filepath.Dir(dbPath); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			panic("failed to create database directory: " + err.Error())
+		}
+	}
+
+	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
 	if err != nil {
 		panic("failed to connect database")
 	}
