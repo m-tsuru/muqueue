@@ -271,6 +271,33 @@ func PostMisskeyWebhookHandler(db *gorm.DB, c *gin.Context) {
 		return
 	}
 
+	if note.User.Host != nil && strings.TrimSpace(*note.User.Host) != "" {
+		userHost := strings.TrimSpace(*note.User.Host)
+		if !isAllowedMisskeyHost(userHost, allowedHosts) {
+			targetServer := strings.TrimSpace(payload.Server)
+			if targetServer == "" {
+				targetServer = strings.TrimSpace(c.GetHeader("x-misskey-host"))
+			}
+			rejectReq := CreateNoteRequest{
+				Text:       fmt.Sprintf("申し訳ありませんが、許可されていないホスト（%s）からのリクエストには応答できません。", userHost),
+				Visibility: note.Visibility,
+				LocalOnly:  note.LocalOnly,
+				ReplyId:    note.ID,
+			}
+			resp, err := CreatePost(c.Request.Context(), targetServer, GetMisskeyAccessToken(), rejectReq)
+			if err != nil {
+				c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{
+				"status":  "rejected_host",
+				"host":    userHost,
+				"note_id": resp.CreatedNote.ID,
+			})
+			return
+		}
+	}
+
 	userIdOnSource := note.User.Username
 	if note.User.Host != nil && *note.User.Host != "" {
 		userIdOnSource = fmt.Sprintf("%s@%s", note.User.Username, *note.User.Host)

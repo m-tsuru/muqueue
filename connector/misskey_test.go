@@ -527,3 +527,80 @@ func TestGetActionByIdIncludesConnectorDetail(t *testing.T) {
 		t.Fatalf("expected mockConn.repliedText == %q, got %q", "custom reply", mockConn.repliedText)
 	}
 }
+
+func TestRemoteUserFromDisallowedHostRepliesWithoutQueueing(t *testing.T) {
+	setupWebhookEnv(t)
+	t.Setenv("X_Misskey_Access_Token", "test-token-123")
+	db := setupTestDB(t)
+	router := setupRouter(db)
+
+	var postCalled bool
+	var receivedURL string
+	var receivedBody connector.CreateNoteRequest
+
+	origClient := connector.MisskeyHTTPClient
+	t.Cleanup(func() { connector.MisskeyHTTPClient = origClient })
+	connector.MisskeyHTTPClient = &http.Client{
+		Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			postCalled = true
+			receivedURL = r.URL.String()
+			if err := json.NewDecoder(r.Body).Decode(&receivedBody); err != nil {
+				t.Errorf("failed to decode request body: %v", err)
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(`{"createdNote":{"id":"reject999","createdAt":"2026-11-21T15:57:22.602Z","text":"rejected","visibility":"public","localOnly":false,"replyId":"atu4f6y3xr"}}`)),
+			}, nil
+		}),
+	}
+
+	// Remote user from disallowed host (misskey.io) mentions the bot on misskey.y2e.org
+	remoteWebhook := strings.Replace(sampleMentionWebhook, `"host":null`, `"host":"misskey.io"`, 1)
+	remoteWebhook = strings.Replace(remoteWebhook, `"localOnly":true`, `"localOnly":false`, 1)
+	req := newWebhookRequest(remoteWebhook)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if !postCalled {
+		t.Fatalf("expected CreatePost to be called for rejected host reply")
+	}
+	if receivedURL != "https://misskey.y2e.org/api/notes/create" {
+		t.Errorf("expected URL https://misskey.y2e.org/api/notes/create, got %s", receivedURL)
+	}
+	if receivedBody.ReplyId != "atu4f6y3xr" || receivedBody.LocalOnly || !strings.Contains(receivedBody.Text, "misskey.io") {
+		t.Errorf("unexpected rejection reply payload: %+v", receivedBody)
+	}
+
+	// Verify nothing was enqueued in DB for the LLM
+	var actionCount, userCount, promptCount, misskeyActionCount int64
+	db.Model(&internal.Action{}).Count(&actionCount)
+	db.Model(&internal.User{}).Count(&userCount)
+	db.Model(&internal.Prompt{}).Count(&promptCount)
+	db.Model(&connector.MisskeyAction{}).Count(&misskeyActionCount)
+	if actionCount != 0 || userCount != 0 || promptCount != 0 || misskeyActionCount != 0 {
+		t.Fatalf("expected 0 DB records for rejected host, got actions=%d users=%d prompts=%d misskeyActions=%d",
+			actionCount, userCount, promptCount, misskeyActionCount)
+	}
+
+	// Remote user from an allowed host IS queued normally without immediate rejection reply
+	postCalled = false
+	t.Setenv("X_Misskey_Allow_Host", "misskey.y2e.org,trusted.example.com")
+	trustedWebhook := strings.Replace(sampleMentionWebhook, `"host":null`, `"host":"trusted.example.com"`, 1)
+	req2 := newWebhookRequest(trustedWebhook)
+	w2 := httptest.NewRecorder()
+	router.ServeHTTP(w2, req2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("expected 200 for trusted remote host, got %d: %s", w2.Code, w2.Body.String())
+	}
+	if postCalled {
+		t.Fatalf("expected no immediate reply for trusted remote host")
+	}
+	db.Model(&internal.Action{}).Count(&actionCount)
+	if actionCount != 1 {
+		t.Fatalf("expected 1 queued action for trusted remote host, got %d", actionCount)
+	}
+}
